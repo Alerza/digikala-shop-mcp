@@ -2,85 +2,30 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { DigikalaClient, digikalaUrl, toman, unwrap } from "./client.js";
+import { DigikalaClient, digikalaUrl, productFrom, toman, unwrap } from "./client.js";
 
 const client = new DigikalaClient();
-const server = new McpServer({ name: "digikala-shop-mcp", version: "0.1.0" });
+const server = new McpServer({ name: "digikala-shop-mcp", version: "0.2.0", instructions: "Read-only Digikala product research. Prices are in Toman." });
 const paging = { page: z.number().int().min(1).default(1) };
+const sorts = { default: 1, cheap: 4, bestselling: 7, discount: 20, expensive: 21, rating: 22 };
+const annotations = { readOnlyHint: true };
+const json = (value) => ({ content: [{ type: "text", text: JSON.stringify(value, null, 2) }] });
+const fail = (error) => ({ content: [{ type: "text", text: `Digikala request failed: ${error.message}` }], isError: true });
+function card(product) { const variant = product?.default_variant ?? {}; const price = variant.price ?? product?.price ?? {}; const rating = product?.rating ?? {}; return { id: product?.id, title: product?.title_fa ?? product?.title_en ?? product?.title, price_toman: toman(price.selling_price), rrp_toman: toman(price.rrp_price), discount_percent: price.discount_percent ?? 0, rating: rating.rate ?? null, votes: rating.count ?? null, stock: price.marketable_stock ?? null, in_stock: product?.status === "marketable", seller: variant.seller?.title_fa ?? null, url: digikalaUrl(product) }; }
+function list(response, limit = 20) { const data = unwrap(response); const items = data?.products ?? data?.items ?? []; const pager = data?.pager ?? {}; return { total_estimate: pager.total_items ?? pager.total ?? null, products: items.slice(0, limit).map(card) }; }
+function specs(product) { return (product?.specifications ?? []).flatMap((group) => (group.attributes ?? []).map((attribute) => ({ title: attribute.title, values: attribute.values ?? [] }))).slice(0, 60); }
 
-function json(value) {
-  return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
-}
-function fail(error) {
-  return { content: [{ type: "text", text: `Digikala request failed: ${error.message}` }], isError: true };
-}
-function card(product) {
-  const price = product?.default_variant?.price || product?.price || {};
-  const selling = price.selling_price ?? price.rrp_price ?? product?.selling_price;
-  return {
-    id: product?.id, title: product?.title_fa || product?.title_en || product?.title,
-    price_toman: toman(selling), discount_percent: price.discount_percent ?? product?.discount_percent ?? 0,
-    rating: product?.rating?.rate ?? product?.rating, availability: product?.default_variant?.status ?? product?.status,
-    url: digikalaUrl(product), image: product?.images?.main?.url?.[0] ?? product?.image,
-  };
-}
-function products(response) {
-  const data = unwrap(response);
-  const list = data?.products ?? data?.items ?? data?.data?.products ?? [];
-  return { products: Array.isArray(list) ? list.map(card) : [], total: data?.pager?.total_items ?? data?.total ?? null };
-}
-
-server.registerTool("search_digikala", {
-  description: "Search Digikala products. All monetary input and output is in Toman.",
-  inputSchema: { query: z.string().min(1).describe("Persian or English search query"), limit: z.number().int().min(1).max(30).default(10), sort: z.string().optional(), category_id: z.number().int().optional(), brand_id: z.number().int().optional(), min_price_toman: z.number().int().positive().optional(), max_price_toman: z.number().int().positive().optional(), ...paging }, annotations: { readOnlyHint: true },
-}, async ({ query, limit, sort, category_id, brand_id, min_price_toman, max_price_toman, page }) => {
-  try { return json(products(await client.search({ query, limit, sort, categoryId: category_id, brandId: brand_id, minPrice: min_price_toman && min_price_toman * 10, maxPrice: max_price_toman && max_price_toman * 10, page }))); } catch (e) { return fail(e); }
-});
-
-server.registerTool("product_details", {
-  description: "Get a product's price, seller, warranty, specifications and rating by Digikala product ID.",
-  inputSchema: { product_id: z.number().int().positive() }, annotations: { readOnlyHint: true },
-}, async ({ product_id }) => { try { const data = unwrap(await client.product(product_id)); return json({ ...card(data?.product ?? data), details: data?.product ?? data }); } catch (e) { return fail(e); } });
-
-server.registerTool("get_products_batch", {
-  description: "Get compact product cards for up to 10 IDs; useful before comparison.",
-  inputSchema: { product_ids: z.array(z.number().int().positive()).min(1).max(10) }, annotations: { readOnlyHint: true },
-}, async ({ product_ids }) => { try { const settled = await Promise.allSettled(product_ids.map((id) => client.product(id))); return json(settled.map((result, i) => result.status === "fulfilled" ? card(unwrap(result.value)?.product ?? unwrap(result.value)) : { id: product_ids[i], error: result.reason.message })); } catch (e) { return fail(e); } });
-
-server.registerTool("compare_products", {
-  description: "Compare prices, ratings and attributes of 2 to 5 products. The output includes only attributes with differing values.",
-  inputSchema: { product_ids: z.array(z.number().int().positive()).min(2).max(5) }, annotations: { readOnlyHint: true },
-}, async ({ product_ids }) => {
-  try {
-    const data = await Promise.all(product_ids.map(async (id) => unwrap(await client.product(id))));
-    const items = data.map((x) => x?.product ?? x);
-    const attrs = new Map();
-    for (const item of items) for (const group of item?.review?.attributes ?? item?.specifications ?? []) for (const attr of group?.attributes ?? [group]) {
-      const key = attr.title || attr.key; if (key) { if (!attrs.has(key)) attrs.set(key, {}); attrs.get(key)[item.id] = attr.values?.map((v) => v.value || v).join(", ") ?? attr.value; }
-    }
-    const differing = Object.fromEntries([...attrs].filter(([, values]) => new Set(Object.values(values)).size > 1));
-    return json({ products: items.map(card), differing_attributes: differing });
-  } catch (e) { return fail(e); }
-});
-
-server.registerTool("product_reviews", {
-  description: "Read buyer reviews for a product.", inputSchema: { product_id: z.number().int().positive(), ...paging }, annotations: { readOnlyHint: true },
-}, async ({ product_id, page }) => { try { return json(unwrap(await client.productReviews(product_id, page))); } catch (e) { return fail(e); } });
-
-server.registerTool("product_questions", {
-  description: "Read buyer questions and answers for a product.", inputSchema: { product_id: z.number().int().positive(), ...paging }, annotations: { readOnlyHint: true },
-}, async ({ product_id, page }) => { try { return json(unwrap(await client.productQuestions(product_id, page))); } catch (e) { return fail(e); } });
-
-server.registerTool("incredible_offers", {
-  description: "List current Digikala promotional offers.", inputSchema: paging, annotations: { readOnlyHint: true },
-}, async ({ page }) => { try { return json(products(await client.incredibleOffers(page))); } catch (e) { return fail(e); } });
-
-server.registerTool("best_selling", {
-  description: "List best-selling Digikala products, optionally scoped to a category.", inputSchema: { category_id: z.number().int().optional(), ...paging }, annotations: { readOnlyHint: true },
-}, async ({ category_id, page }) => { try { return json(products(await client.bestSelling(page, category_id))); } catch (e) { return fail(e); } });
-
-server.registerTool("product_url", {
-  description: "Resolve a Digikala product ID to its title and shareable URL.", inputSchema: { product_id: z.number().int().positive() }, annotations: { readOnlyHint: true },
-}, async ({ product_id }) => { try { const data = unwrap(await client.product(product_id)); return json(card(data?.product ?? data)); } catch (e) { return fail(e); } });
-
+server.registerTool("search_digikala", { description: "Search Digikala products. Prices are in Toman.", inputSchema: { query: z.string().min(1), page_size: z.number().int().min(1).max(30).default(10), min_price_toman: z.number().int().positive().optional(), max_price_toman: z.number().int().positive().optional(), ...paging }, annotations }, async ({ query, page_size, min_price_toman, max_price_toman, page }) => { try { return json({ query, page, ...list(await client.search({ query, page, minPrice: min_price_toman && min_price_toman * 10, maxPrice: max_price_toman && max_price_toman * 10 }), page_size) }); } catch (error) { return fail(error); } });
+server.registerTool("browse_category", { description: "Browse a Digikala category using its text slug and an optional sort.", inputSchema: { category_slug: z.string().min(1), sort: z.enum(Object.keys(sorts)).default("default"), min_price_toman: z.number().int().positive().optional(), max_price_toman: z.number().int().positive().optional(), ...paging }, annotations }, async ({ category_slug, sort, min_price_toman, max_price_toman, page }) => { try { const response = await client.category({ slug: category_slug, page, sort: sorts[sort], minPrice: min_price_toman && min_price_toman * 10, maxPrice: max_price_toman && max_price_toman * 10 }); const data = unwrap(response); const brands = data?.filters?.brands?.options ?? []; return json({ category: category_slug, page, sort, ...list(response), brands: brands.slice(0, 20).map(({ id, title_fa, code }) => ({ id, title: title_fa, code })) }); } catch (error) { return fail(error); } });
+server.registerTool("search_filters", { description: "Find relevant brand and category filter options for a query.", inputSchema: { query: z.string().min(1) }, annotations }, async ({ query }) => { try { const data = unwrap(await client.search({ query })); const filters = data?.filters ?? {}; const compact = (options) => (options ?? []).slice(0, 30).map(({ id, title_fa, code }) => ({ id, title: title_fa, code })); return json({ query, brands: compact(filters.brands?.options), categories: compact(filters.categories?.options) }); } catch (error) { return fail(error); } });
+server.registerTool("product_details", { description: "Get a compact product card plus warranty, brand and category information.", inputSchema: { product_id: z.number().int().positive() }, annotations }, async ({ product_id }) => { try { const product = productFrom(await client.product(product_id)); return json({ ...card(product), warranty: product?.default_variant?.warranty?.title_fa ?? null, brand: product?.brand?.title_fa ?? product?.data_layer?.brand ?? null, category: (product?.breadcrumb ?? []).map((item) => item.title).filter(Boolean) }); } catch (error) { return fail(error); } });
+server.registerTool("product_specs", { description: "Get up to 60 technical attributes for a product.", inputSchema: { product_id: z.number().int().positive() }, annotations }, async ({ product_id }) => { try { const product = productFrom(await client.product(product_id)); return json({ id: product_id, title: product?.title_fa, specs: specs(product) }); } catch (error) { return fail(error); } });
+server.registerTool("product_overview", { description: "Get Digikala's AI review overview, rating summary and recent review snippets.", inputSchema: { product_id: z.number().int().positive() }, annotations }, async ({ product_id }) => { try { const product = productFrom(await client.product(product_id)); return json({ id: product_id, title: product?.title_fa, rating: product?.rating, comments_count: product?.comments_count, questions_count: product?.questions_count, ai_overview: (product?.comments_overview?.overview ?? "").slice(0, 800), recent_comments: (product?.last_comments ?? []).slice(0, 5).map(({ rate, body, is_buyer }) => ({ rate, body: body?.slice(0, 200), is_buyer })) }); } catch (error) { return fail(error); } });
+server.registerTool("product_reviews", { description: "Read buyer reviews, optionally filtered by rating.", inputSchema: { product_id: z.number().int().positive(), rate: z.number().int().min(1).max(5).optional(), buyers_only: z.boolean().default(true), ...paging }, annotations }, async ({ product_id, rate, buyers_only, page }) => { try { const data = unwrap(await client.productReviews(product_id, { page, rate, buyersOnly: buyers_only })); const comments = (data?.comments ?? []).slice(0, 20).map(({ rate: commentRate, title, body, created_at, is_buyer, advantages, disadvantages }) => ({ rate: commentRate, title, body: body?.slice(0, 400), created_at, is_buyer, advantages, disadvantages })); return json({ product_id, page, total_comments: data?.pager?.total_items ?? null, comments }); } catch (error) { return fail(error); } });
+server.registerTool("product_questions", { description: "Read product questions and their answers.", inputSchema: { product_id: z.number().int().positive(), ...paging }, annotations }, async ({ product_id, page }) => { try { const data = unwrap(await client.productQuestions(product_id, page)); return json({ product_id, page, total_questions: data?.pager?.total_items ?? null, questions: (data?.questions ?? []).slice(0, 20) }); } catch (error) { return fail(error); } });
+server.registerTool("get_products_batch", { description: "Get compact cards for up to 10 product IDs.", inputSchema: { product_ids: z.array(z.number().int().positive()).min(1).max(10) }, annotations }, async ({ product_ids }) => { const ids = [...new Set(product_ids)]; const results = await Promise.allSettled(ids.map((id) => client.product(id))); return json(results.map((result, index) => result.status === "fulfilled" ? card(productFrom(result.value)) : { id: ids[index], error: result.reason.message })); });
+server.registerTool("compare_products", { description: "Compare 2 to 5 products and show only differing specifications.", inputSchema: { product_ids: z.array(z.number().int().positive()).min(2).max(5) }, annotations }, async ({ product_ids }) => { try { const products = await Promise.all(product_ids.map(async (id) => productFrom(await client.product(id)))); const attributes = new Map(); for (const product of products) for (const spec of specs(product)) { if (!attributes.has(spec.title)) attributes.set(spec.title, {}); attributes.get(spec.title)[product.id] = spec.values.map((value) => value.value ?? value).join(", "); } return json({ products: products.map(card), differing_specs: Object.fromEntries([...attributes].filter(([, values]) => new Set(Object.values(values)).size > 1)) }); } catch (error) { return fail(error); } });
+server.registerTool("incredible_offers", { description: "List current incredible offers and products running out soon.", inputSchema: paging, annotations }, async ({ page }) => { try { const data = unwrap(await client.incredibleOffers(page)); const main = data?.incredible_products_list ?? {}; return json({ page, total_estimate: main?.pager?.total ?? null, products: (main.products ?? []).map(card), running_out_soon: (data?.running_out_incredible_products?.products ?? []).slice(0, 5).map(card) }); } catch (error) { return fail(error); } });
+server.registerTool("best_selling", { description: "List site-wide best-selling products or the best sellers of a category slug.", inputSchema: { category_slug: z.string().min(1).optional(), ...paging }, annotations }, async ({ category_slug, page }) => { try { const response = category_slug ? await client.category({ slug: category_slug, page, sort: sorts.bestselling }) : await client.bestSelling(page); return json({ category: category_slug ?? null, page, ...list(response) }); } catch (error) { return fail(error); } });
+server.registerTool("product_url", { description: "Resolve a product ID to its title and shareable URL.", inputSchema: { product_id: z.number().int().positive() }, annotations }, async ({ product_id }) => { try { return json(card(productFrom(await client.product(product_id)))); } catch (error) { return fail(error); } });
 await server.connect(new StdioServerTransport());

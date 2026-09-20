@@ -1,6 +1,6 @@
 {
   "name": "digikala-shop-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Read-only MCP server for Digikala product discovery and comparison",
   "type": "module",
   "bin": { "digikala-shop-mcp": "src/index.js" },

@@ -4,7 +4,9 @@
 
 ## ابزارها
 
-`search_digikala`، `product_details`، `get_products_batch`، `compare_products`، `product_reviews`، `product_questions`، `incredible_offers`، `best_selling` و `product_url`.
+۱۳ ابزار فقط‌خواندنی: `search_digikala`، `browse_category`، `search_filters`، `product_details`، `product_specs`، `product_overview`، `product_reviews`، `product_questions`، `get_products_batch`، `compare_products`، `incredible_offers`، `best_selling` و `product_url`.
+
+دسته‌ها با `category_slug` کار می‌کنند. مرتب‌سازی‌های معتبر `default`، `cheap`، `bestselling`، `discount`، `expensive` و `rating` هستند. برای جست‌وجوهای دارای بودجه، `min_price_toman` و `max_price_toman` را بدهید.
 
 ## اجرا
 
@@ -32,4 +34,4 @@ npm start
 npm test
 ```
 
-داده‌ها از API وب عمومی و مستندنشدهٔ دیجی‌کالا دریافت می‌شوند و ممکن است قرارداد آن بدون اطلاع قبلی تغییر کند. پیش از خرید، قیمت و موجودی را در لینک محصول تأیید کنید. این پروژه مستقل است و وابستگی یا تأییدی از سوی دیجی‌کالا ندارد.
+داده‌ها از API وب عمومی و مستندنشدهٔ دیجی‌کالا دریافت می‌شوند و ممکن است قرارداد آن بدون اطلاع قبلی تغییر کند. هر درخواست تا سه بار با backoff کوتاه تلاش می‌شود. پیش از خرید، قیمت و موجودی را در لینک محصول تأیید کنید. این پروژه مستقل است و وابستگی یا تأییدی از سوی دیجی‌کالا ندارد.
