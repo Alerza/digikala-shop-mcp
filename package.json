@@ -1,0 +1,16 @@
+{
+  "name": "digikala-shop-mcp",
+  "version": "0.1.0",
+  "description": "Read-only MCP server for Digikala product discovery and comparison",
+  "type": "module",
+  "bin": { "digikala-shop-mcp": "src/index.js" },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test"
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.0"
+  }
+}
